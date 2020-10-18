@@ -413,6 +413,16 @@ function render_path() {
     const pathString = pointToPathString(state.path);
     const path = paper.path(pathString);
     path.node.setAttribute("class", "path");
+    console.log(state);
+    // if (state.path2) {
+    //     const centroids = [];
+    //     for (poly of state.path2) {
+    //         centroids.push(poly.centroid());
+    //     }
+    //     const pathString = pointToPathString(centroids);
+    //     const path = paper.path(pathString);
+    //     path.node.setAttribute("class", "path");
+    // }
 }
 
 function render_points(points) {
@@ -482,20 +492,20 @@ function render_points(points) {
 }
 
 function compute_path() {
-    try {
+    // try {
         const sx = parseFloat(document.getElementById("sx").value);
         const sy = parseFloat(document.getElementById("sy").value);
         const ex = parseFloat(document.getElementById("ex").value);
         const ey = parseFloat(document.getElementById("ey").value);
 
         update_state({
-            path: mesh.findPath([sx, sy], [ex, ey]),
+            path: mesh.findPath([sx, sy], [ex, ey])
         });
 
         render();
-    } catch (err) {
-        console.error(err);
-    }
+    // } catch (err) {
+    //     console.error(err);
+    // }
 
     return false;
 }

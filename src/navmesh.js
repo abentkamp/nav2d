@@ -280,6 +280,8 @@ export class NavMesh {
     }
 
     _findPath(from, to) {
+        from = _normalizePoint(from);
+        to = _normalizePoint(to);
         // This is the A* algorithm
         const fromPoly = this._findContainingPolygon(from);
         const toPoly = this._findContainingPolygon(to);
@@ -374,6 +376,97 @@ export class NavMesh {
     }
 
     _funnel(from, to, path) {
+        console.log(`Funnel start`)
+        console.log(path);
+        // Following https://medium.com/@reza.teshnizi/the-funnel-algorithm-explained-visually-41e374172d2d
+        if (path.length === 0) {
+            throw new Error("Path cannot be empty.");
+        } else if (path.length === 1) {
+            return [from, to];
+        }
+
+        const tail = [from];
+        const left = [];
+        const right = [];
+
+        const initialPortal = path[0].neighbors[path[1]._uuid].portal;
+        const [initialLeft, initialRight] = this._orderLeftRight(from, initialPortal.p1, initialPortal.p2);
+        left.push(initialLeft);
+        right.push(initialRight);
+
+
+        for (let i = 1; i < path.length - 2; i++) {
+            console.log(`Iteration ${i}`);
+            console.log(tail);
+            console.log(left);
+            console.log(right);
+            const poly = path[i];
+            const nextPoly = path[i + 1];
+            const portal = poly.neighbors[nextPoly._uuid].portal;
+
+            console.log(portal);
+
+            const lastLeft = left.length === 0 ? tail[tail.length - 1] : left[left.length - 1];
+            const lastRight = right.length === 0 ? tail[tail.length - 1] : right[right.length - 1];
+            let extendLeft;
+            let newPoint;
+            if (portal.p1.equals(lastLeft)) {
+                extendLeft = false;
+                newPoint = portal.p2;
+            } else if (portal.p2.equals(lastLeft)) {
+                extendLeft = false;
+                newPoint = portal.p1;
+            } else if (portal.p1.equals(lastRight)) {
+                extendLeft = true;
+                newPoint = portal.p2;
+            } else if (portal.p2.equals(lastRight)) {
+                extendLeft = true;
+                newPoint = portal.p1;
+            } else {
+                throw new Error("Invalid portal: Funnel cannot be extended on both sides at once.");
+            }
+
+            this._extendFunnel(tail, left, right, extendLeft, newPoint);
+        }
+
+        this._extendFunnel(tail, left, right, true, to);
+        this._extendFunnel(tail, left, right, false, to);
+
+        return tail;
+    }
+
+    _extendFunnel(tail, left, right, extendLeft, newPoint){
+        const apex = tail[tail.length - 1];
+        // We pretend to be in the `expandLeft` case here. Otherwise flip.
+        if (!extendLeft) {
+            [left, right] = [right, left];
+        }
+        // Determine angle of `apex`-`newPoint` relative to `apex`-`left[j]`
+        let j = 0;
+        while (j < left.length
+                && this._isInLeftRightOrder(apex, newPoint, left[j], !extendLeft)) {
+            j++;
+        }
+        // All points in `left` with index `< j` are right of `newPoint` and
+        // all points in `left` with index `>= j` are left of or at the same angle as `newPoint`. 
+        left.length = j; // Shrink funnel if `j < left.length`
+        left.push(newPoint);
+        if (j === 0) {
+            // If the funnel shrunk all the way on the left, it might collapse to the right.
+            let k = 0;
+            while (k < right.length
+                    && !this._isInLeftRightOrder(apex, newPoint, right[k], !extendLeft)) {
+                k++;
+            }
+            // All points in `right` with index `< k` are left of or at the same angle as `newPoint` and
+            // all points in `right` with index `>= k` are right of `newPoint`. 
+            tail.push(...right.splice(0, k)); // Collapse funnel if `k > 0`
+        }
+    }
+
+    _funnel_old(from, to, path) {
+        console.log(`start funnel`);
+        console.log(path);
         if (path.length === 0) {
             throw new Error("Path cannot be empty.");
         } else if (path.length === 1) {
@@ -383,8 +476,8 @@ export class NavMesh {
         const points = [from];
         let edge1 = null;
         let edge2 = null;
-
         for (let i = 0; i < path.length - 1; i++) {
+            console.log(`Start iteration ${i}`);
             const poly = path[i];
             const next = path[i + 1];
             const portal = poly.neighbors[next._uuid].portal;
@@ -403,10 +496,13 @@ export class NavMesh {
                         // We only need to check the polygon up to now, not the future
                         // ones. This can have serious performance implications,
                         // as the function is recursive.
-                        path.slice(i - 1),
-                        edge.p2
+                        path,
+                        edge.p2,
+                        i - 1
                     );
+                    console.log(`Start recursion`);
                     points.push(...this._funnel(edge.p2, to, newPath));
+                    console.log(`End recursion`);
                     break;
                 }
             }
@@ -446,11 +542,42 @@ export class NavMesh {
         }
     }
 
-    _splitAt(path, point) {
+
+    /** 
+     * Are the points `p1` and `p2` in left-to-right order, viewed from `origin`?
+     * Checks for right-to-left order if `flip = true`.
+     * Returns `false` if the angles are equal.
+     */
+    _isInLeftRightOrder(origin, p1, p2, flip = false) {
+        if (flip) {
+            [p1, p2] = [p2, p1];
+        }
+        const vec1 = p1.sub(origin);
+        const vec2 = p2.sub(origin);
+        return cross(vec1, vec2) > 0;
+    }
+
+    /** Returns the points `p1` and `p2` in left-to-right order, viewed from `origin`. */
+    _orderLeftRight(origin, p1, p2) {
+        if (this._isInLeftRightOrder(origin, p1, p2)) {
+            return [p1, p2];
+        } else {
+            return [p2, p1];
+        }
+    }
+
+    _splitAt(path, point, maxIndex) {
         const newStartIndex = path.indexOf(
             // Reverse changes the array in-place
             [...path].reverse().find((p) => p.contains(point))
         );
+        // let newStartIndex = -1;
+        // for (let i = maxIndex; i > 0; i--) {
+        //     if (path[i].contains(point)) {
+        //         newStartIndex = i;
+        //         break;
+        //     }
+        // }
         return path.slice(newStartIndex);
     }
 
