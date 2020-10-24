@@ -91,6 +91,20 @@ export class Edge {
         return new Edge(...endpoints);
     }
 
+    distanceToPoint(point) {
+        let squaredLength = dot(this.p2.sub(this.p1), this.p2.sub(this.p1));
+        let r = dot(this.p2.sub(this.p1), point.sub(this.p1));
+        r /= squaredLength;
+
+        if (r < 0) {
+            return point.sub(this.p1).length();
+        } else if (r > 1) {
+            return point.sub(this.p2).length();
+        } else {
+            return Math.sqrt(dot(point.sub(this.p1), point.sub(this.p1)) - r * r * squaredLength);
+        }
+    }
+
     equals(other) {
         return (
             (this.p1.equals(other.p1) && this.p2.equals(other.p2)) ||
@@ -176,6 +190,17 @@ export class Polygon {
         return null;
     }
 
+    distanceToPoint(point) {
+        let shortest = Infinity;
+        for (const edge of this.edges()) {
+            let dist = edge.distanceToPoint(point);
+            if (dist < shortest) {
+                shortest = dist;
+            }
+        }
+        return shortest;
+    }
+
     boundsSize() {
         const [minx, miny, maxx, maxy] = this.bounds;
         return { x: minx, y: miny, w: maxx - minx, h: maxy - miny };
@@ -183,13 +208,15 @@ export class Polygon {
 }
 
 export class NavMesh {
-    constructor(polygons, costFunc = null, heuristicFunc = null) {
+    constructor(polygons, costFunc = null, heuristicFunc = null, fromTolerance = 0, toTolerance = 0) {
         this._uuid = uuidv4();
         this.polygons = this._triangulate(polygons).map(
             (points) => new Polygon(points)
         );
         this.costFunc = costFunc;
         this.heuristicFunc = heuristicFunc;
+        this.fromTolerance = fromTolerance;
+        this.toTolerance = toTolerance;
 
         // This will be used to check point collision with
         // triangles. This should be much smaller that the typical
@@ -283,8 +310,8 @@ export class NavMesh {
 
     _findPath(from, to) {
         // This is the A* algorithm
-        const fromPoly = this._findContainingPolygon(from);
-        const toPoly = this._findContainingPolygon(to);
+        const fromPoly = this._findClosestPolygon(from, this.fromTolerance);
+        const toPoly = this._findClosestPolygon(to, this.toTolerance);
 
         if (fromPoly === null || toPoly === null) return null;
 
@@ -356,6 +383,34 @@ export class NavMesh {
         }
 
         return null;
+    }
+
+    _findClosestPolygon(point, searchRadius) {
+        if (searchRadius < this.pointQuerySize / 2) {
+            return this._findContainingPolygon(point);
+        }
+
+        let containingPoly = this._findContainingPolygon(point);
+        if (containingPoly) return containingPoly;
+
+        const bounds = {
+            x: point.x - searchRadius / 2,
+            y: point.y - searchRadius / 2,
+            w: searchRadius,
+            h: searchRadius,
+        };
+        let closestDistance = Infinity;
+        let closestPoly = null;
+        for (const poly of this.qt.get(bounds)) {
+            let distance = poly.polygon.distanceToPoint(point);
+            console.log(distance)
+            if (distance < closestDistance) {
+                closestPoly = poly;
+                closestDistance = distance;
+            }
+        }
+
+        return closestPoly.polygon;
     }
 
     _reconstructPath(to, cameFrom) {
