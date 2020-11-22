@@ -298,10 +298,20 @@ export class NavMesh {
 
                 const portal = this._computePortal(poly1, poly2);
                 if (portal !== null && portal.length() > 0) {
-                    // Ensure that portal points are given in clockwise order, viewed from the centroid of the polygon
-                    let [p1, p2] = this._orderClockwise(poly1.centroid(), portal.p1, portal.p2);
-                    poly1.neighbors[poly2._uuid] = { polygon: poly2, portal: new Edge(p1, p2) };
-                    poly2.neighbors[poly1._uuid] = { polygon: poly1, portal: new Edge(p2, p1) };
+                    // Ensure that portal points are given in left-to-right order, viewed from the centroid of the polygon
+                    let [p1, p2] = this._orderLeftRight(
+                        poly1.centroid(),
+                        portal.p1,
+                        portal.p2
+                    );
+                    poly1.neighbors[poly2._uuid] = {
+                        polygon: poly2,
+                        portal: new Edge(p1, p2),
+                    };
+                    poly2.neighbors[poly1._uuid] = {
+                        polygon: poly1,
+                        portal: new Edge(p2, p1),
+                    };
                 }
             }
         }
@@ -470,23 +480,24 @@ export class NavMesh {
             const poly = path[i];
             const nextPoly = path[i + 1];
             const portal = poly.neighbors[nextPoly._uuid].portal;
-            // The portal end points are in clockwise order, viewed from the inside of the polygon.
-
-            // Extend funnel on the left
-            this._extendFunnel(tail, left, right, true, portal.p1);
-
-            // Extend funnel on the right
-            this._extendFunnel(tail, left, right, false, portal.p2);
+            // The portal end points are in left-to-right order, viewed from the inside of the polygon.
+            this._extendFunnel(tail, left, right, portal.p1, portal.p2);
         }
 
         // Close funnel to endpoint
-        this._extendFunnel(tail, left, right, true, to);
-        this._extendFunnel(tail, left, right, false, to);
+        this._extendFunnel(tail, left, right, to, to);
 
         return tail;
     }
 
-    _extendFunnel(tail, left, right, extendLeft, newPoint){
+    _extendFunnel(tail, left, right, leftPoint, rightPoint) {
+        // Extend funnel on the left
+        this._extendFunnelSide(tail, left, right, true, leftPoint);
+        // Extend funnel on the right
+        this._extendFunnelSide(tail, left, right, false, rightPoint);
+    }
+
+    _extendFunnelSide(tail, left, right, extendLeft, newPoint) {
         const apex = tail[tail.length - 1];
         // We pretend to be in the `expandLeft` case here. Otherwise flip.
         if (!extendLeft) {
@@ -494,56 +505,77 @@ export class NavMesh {
         }
 
         // If `newPoint` is the end point of the left side of the funnel, skip it.
-        const lastLeft = left.length === 0 ? tail[tail.length - 1] : left[left.length - 1];
+        const lastLeft =
+            left.length === 0 ? tail[tail.length - 1] : left[left.length - 1];
         if (newPoint.equals(lastLeft)) {
             return;
         }
 
-        // Determine angle of `apex`-`newPoint` relative to `apex`-`left[j]`
-        let j = 0;
-        while (j < left.length
-                && this._isInClockwiseOrder(apex, newPoint, left[j], !extendLeft)) {
-            j++;
-        }
+        // Determine how far to shrink the funnel
+        let j = this._findFirstLeftOfPoint(
+            apex,
+            left,
+            newPoint,
+            true,
+            !extendLeft
+        );
         // All points in `left` with index `< j` are right of `newPoint` and
-        // all points in `left` with index `>= j` are left of or at the same angle as `newPoint`. 
+        // all points in `left` with index `>= j` are left of or at the same angle as `newPoint`.
         left.length = j; // Shrink funnel if `j < left.length`
         left.push(newPoint);
         if (j === 0) {
             // If the funnel shrunk all the way on the left, it might collapse to the right.
             // Determine how far it needs to collapse
-            let k = 0;
-            while (k < right.length
-                    && !this._isInClockwiseOrder(apex, newPoint, right[k], !extendLeft)) {
-                k++;
-            }
+            let k = this._findFirstLeftOfPoint(
+                apex,
+                right,
+                newPoint,
+                false,
+                extendLeft
+            );
             // All points in `right` with index `< k` are left of or at the same angle as `newPoint` and
-            // all points in `right` with index `>= k` are right of `newPoint`. 
+            // all points in `right` with index `>= k` are right of `newPoint`.
             tail.push(...right.splice(0, k)); // Collapse funnel if `k > 0`
         }
     }
 
-    /** 
-     * Are the points `p1` and `p2` in clockwise order, viewed from `origin`?
-     * Checks for counter-clockwise order instead if `flip = true`.
-     * Returns `false` if the angles are equal.
+    /**
+     * Given an array `arr` of points, find the index of the first one that is
+     * on the left side of a given point `p`, viewed from `origin`. If no such
+     * point exists, the length of the list is returned.
+     *
+     * If `flip` is true, find the first that is on the right side instead.
+     *
+     * If `acceptColinear` is true, the returned point may also be colinear.
      */
-    _isInClockwiseOrder(origin, p1, p2, flip = false) {
-        if (flip) {
-            [p1, p2] = [p2, p1];
+    _findFirstLeftOfPoint(origin, arr, p, acceptColinear, flip) {
+        let i;
+        for (i = 0; i < arr.length; i++) {
+            const found = flip
+                ? this._isInLeftRightOrder(origin, p, arr[i], acceptColinear)
+                : this._isInLeftRightOrder(origin, arr[i], p, acceptColinear);
+            if (found) return i;
         }
-        const vec1 = p1.sub(origin);
-        const vec2 = p2.sub(origin);
-        return cross(vec1, vec2) > 0;
+        return i;
     }
 
-    /** Returns the points `p1` and `p2` in clockwise order, viewed from `origin`. */
-    _orderClockwise(origin, p1, p2) {
-        if (this._isInClockwiseOrder(origin, p1, p2)) {
+    /**
+     * Are the points `p1` and `p2` in left-to-right order, viewed from `origin`?
+     * If points are colinear, the value of `acceptColinear` is returned.
+     */
+    _isInLeftRightOrder(origin, p1, p2, acceptColinear = false) {
+        const vec1 = p1.sub(origin);
+        const vec2 = p2.sub(origin);
+        const c = cross(vec1, vec2);
+        return acceptColinear ? c <= 0 : c < 0;
+    }
+
+    /** Returns the points `p1` and `p2` in left-to-right order, viewed from `origin`. */
+    _orderLeftRight(origin, p1, p2) {
+        if (this._isInLeftRightOrder(origin, p1, p2)) {
             return [p1, p2];
         } else {
             return [p2, p1];
         }
     }
-
 }
