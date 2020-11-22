@@ -96,7 +96,12 @@ const navmesh = new NavMesh([
 ```
 
 You can pass points as arrays `[x, y]`, as objects `{x:x, y:y}` or
-as `Point(x, y)` objects.
+as `Point(x, y)` objects. 
+
+Polygons with holes are also supported. To pass a polygon with holes,
+instead of an array of points, provide an array of polygons,
+the first of which will be interpreted as the surrounding polygon and
+the rest will be interpreted as holes.
 
 > **Warning:** Instantiating the `NavMesh` object can be slow if you have a big mesh with lots
 > of polygons, as the constructor has to triangulate the polygons and creates

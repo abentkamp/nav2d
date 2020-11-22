@@ -231,25 +231,43 @@ export class NavMesh {
     _triangulate(polygons) {
         const triangles = [];
         for (const poly of polygons) {
-            const trianglesIndices = earcut(this._flatten(poly));
+            const { vertices, holes } = this._flatten(poly);
+            const trianglesIndices = earcut(vertices, holes);
             for (let i = 0; i < trianglesIndices.length / 3; i++) {
                 const indices = trianglesIndices.slice(i * 3, i * 3 + 3);
-                triangles.push(indices.map((j) => poly[j]));
+                triangles.push(
+                    indices.map(  
+                        (j) => new Vector(vertices[2 * j], vertices[2 * j + 1])
+                    )
+                );
             }
         }
         return triangles;
     }
 
-    _flatten(points) {
-        const flatPoints = [];
-        for (const point of points) {
-            if (point instanceof Array) {
-                flatPoints.push(...point);
-            } else {
-                flatPoints.push(point.x, point.y);
+    _flatten(data) {
+        if (data[0].x !== undefined || typeof data[0][0] === "number") {
+            // Polygon without holes
+            data = [data];
+        }
+
+        let result = { vertices: [], holes: [] };
+        let holeIndex = 0;
+
+        for (let i = 0; i < data.length; i++) {
+            for (let point of data[i]) {
+                if (point instanceof Array) {
+                    result.vertices.push(...point);
+                } else {
+                    result.vertices.push(point.x, point.y);
+                }
+            }
+            if (i > 0) {
+                holeIndex += data[i - 1].length;
+                result.holes.push(holeIndex);
             }
         }
-        return flatPoints;
+        return result;
     }
 
     _buildQuadtree() {
