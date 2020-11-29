@@ -114,10 +114,11 @@ export class Edge {
 }
 
 export class Polygon {
-    constructor(points) {
+    constructor(points, group = "default") {
         this._uuid = uuidv4();
         this.points = points.map(_normalizePoint);
         this.bounds = this._computeBounds();
+        this.group = group;
     }
 
     _computeBounds() {
@@ -210,9 +211,7 @@ export class Polygon {
 export class NavMesh {
     constructor(polygons, costFunc = null, heuristicFunc = null, fromTolerance = 0, toTolerance = 0) {
         this._uuid = uuidv4();
-        this.polygons = this._triangulate(polygons).map(
-            (points) => new Polygon(points)
-        );
+        this.polygons = this._triangulate(polygons)
         this.costFunc = costFunc;
         this.heuristicFunc = heuristicFunc;
         this.fromTolerance = fromTolerance;
@@ -229,28 +228,39 @@ export class NavMesh {
     }
 
     _triangulate(polygons) {
+        // Normalize input
+        if (Array.isArray(polygons)) {
+            polygons = {default: polygons};
+        }
+
+        //Triangulate
         const triangles = [];
-        for (const poly of polygons) {
-            const { vertices, holes } = this._flatten(poly);
-            const trianglesIndices = earcut(vertices, holes);
-            for (let i = 0; i < trianglesIndices.length / 3; i++) {
-                const indices = trianglesIndices.slice(i * 3, i * 3 + 3);
-                triangles.push(
-                    indices.map(  
-                        (j) => new Vector(vertices[2 * j], vertices[2 * j + 1])
-                    )
-                );
+        for (const group in polygons) {
+            for (const poly of polygons[group]) {
+                const { vertices, holes } = this._flatten(poly);
+                const trianglesIndices = earcut(vertices, holes);
+                for (let i = 0; i < trianglesIndices.length / 3; i++) {
+                    const indices = trianglesIndices.slice(i * 3, i * 3 + 3);
+                    triangles.push(
+                        new Polygon(
+                            indices.map((j) => new Vector(vertices[2 * j], vertices[2 * j + 1])),
+                            group
+                        )
+                    );
+                }
             }
         }
         return triangles;
     }
 
     _flatten(data) {
+        // Normalize input
         if (data[0].x !== undefined || typeof data[0][0] === "number") {
             // Polygon without holes
             data = [data];
         }
 
+        // Flatten
         let result = { vertices: [], holes: [] };
         let holeIndex = 0;
 
@@ -328,18 +338,18 @@ export class NavMesh {
         return null;
     }
 
-    findPath(from, to) {
+    findPath(from, to, groups = null) {
         from = _normalizePoint(from);
         to = _normalizePoint(to);
 
-        const path = this._findPath(from, to);
+        const path = this._findPath(from, to, groups);
         return path && this._funnel(from, to, path);
     }
 
-    _findPath(from, to) {
+    _findPath(from, to, groups = null) {
         // This is the A* algorithm
-        const fromPoly = this._findClosestPolygon(from, this.fromTolerance);
-        const toPoly = this._findClosestPolygon(to, this.toTolerance);
+        const fromPoly = this._findClosestPolygon(from, this.fromTolerance, groups);
+        const toPoly = this._findClosestPolygon(to, this.toTolerance, groups);
 
         if (fromPoly === null || toPoly === null) return null;
 
@@ -358,6 +368,10 @@ export class NavMesh {
             }
 
             for (const { polygon: next } of Object.values(current.neighbors)) {
+                if (groups && !groups.includes(next.group)) {
+                    continue;
+                }
+
                 const nextCost =
                     cost[current._uuid] + this._computeCost(current, next);
 
@@ -398,7 +412,7 @@ export class NavMesh {
         return this._computeDistance(poly, to);
     }
 
-    _findContainingPolygon(point) {
+    _findContainingPolygon(point, groups) {
         const halfQuerySize = this.pointQuerySize / 2;
         const bounds = {
             x: point.x - halfQuerySize,
@@ -407,18 +421,20 @@ export class NavMesh {
             h: this.pointQuerySize,
         };
         for (const poly of this.qt.get(bounds)) {
-            if (poly.polygon.contains(point)) return poly.polygon;
+            if (poly.polygon.contains(point) && (!groups || groups.includes(poly.polygon.group))) {
+                return poly.polygon;
+            }
         }
 
         return null;
     }
 
-    _findClosestPolygon(point, searchRadius) {
+    _findClosestPolygon(point, searchRadius, groups) {
         if (searchRadius < this.pointQuerySize / 2) {
-            return this._findContainingPolygon(point);
+            return this._findContainingPolygon(point, groups);
         }
 
-        let containingPoly = this._findContainingPolygon(point);
+        let containingPoly = this._findContainingPolygon(point, groups);
         if (containingPoly) return containingPoly;
 
         const bounds = {
@@ -430,11 +446,12 @@ export class NavMesh {
         let closestDistance = Infinity;
         let closestPoly = null;
         for (const poly of this.qt.get(bounds)) {
-            let distance = poly.polygon.distanceToPoint(point);
-            console.log(distance)
-            if (distance < closestDistance) {
-                closestPoly = poly;
-                closestDistance = distance;
+            if (!groups || groups.includes(poly.polygon.group)) {
+                let distance = poly.polygon.distanceToPoint(point);
+                if (distance < closestDistance) {
+                    closestPoly = poly;
+                    closestDistance = distance;
+                }
             }
         }
 
