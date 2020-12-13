@@ -454,8 +454,11 @@ export class NavMesh {
                 }
             }
         }
-
-        return closestPoly.polygon;
+        if (closestPoly === null){
+            return null;
+        } else {
+            return closestPoly.polygon;
+        }
     }
 
     _reconstructPath(to, cameFrom) {
